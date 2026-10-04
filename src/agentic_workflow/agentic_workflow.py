@@ -147,9 +147,9 @@ def get_valid_google_api_key() -> str:
 
 def get_valid_gemini_model() -> str:
     """Returns a valid Gemini generation model name."""
-    model = os.getenv("GEMINI_GENERATION_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
-    if model == "gemini-3.5-flash-lite":
-        return "gemini-2.5-flash"
+    model = os.getenv("GEMINI_GENERATION_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-1.5-flash"
+    if model in ["gemini-3.5-flash-lite", "gemini-2.5-flash"]:
+        return "gemini-1.5-flash"
     return model
 
 

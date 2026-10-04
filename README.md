@@ -1,7 +1,7 @@
 # 🚀 Business Orchestration with Autonomous Agentic Workflows & Model Context Protocol (MCP)
 
 > **Real-Time Business Use Case**: Autonomous Credit Card Approval & Underwriting Engine  
-> **Tech Stack**: LangChain | LangGraph | FastMCP | Google Gemini 3.5 Flash-Lite | FastAPI | Pydantic
+> **Tech Stack**: LangChain | LangGraph | FastMCP | Google Gemini | LangSmith Observability | FastAPI | Pydantic
 
 ---
 
@@ -111,14 +111,96 @@ Programmatically benchmarks workflow performance against ground-truth evaluation
   - **Short-Circuit Router Accuracy (%)**
   - **Average Execution Latency (seconds/run)**
 
-### 🔍 3. Agentic Workflow Observability & LangSmith Tracing
+### 🔍 3. Agentic Workflow Observability & LangSmith Tracing Architecture
 Provides enterprise-grade trace visibility into DAG graph node execution, tool calls, Gemini LLM prompts/completions, latencies, and dynamic short-circuit router decisions.
 - **File**: [`src/agentic_workflow/agentic_workflow.py`](src/agentic_workflow/agentic_workflow.py)
-- **Features**:
-  - **LangSmith Tracing Integration**: Zero-code telemetry via standard environment variables (`LANGCHAIN_TRACING_V2=true`).
-  - **Node & Tool Instrumentation**: `@traceable` annotations on nodes (`node_financial_agent`, `node_compliance_agent`, etc.) and business tools (`evaluate_financial_risk`, `verify_kyc_and_fraud`).
-  - **Rich Metadata & Run Tagging**: Generates structured run tags (`credit-card-approval`, `credit-score-tier-700`) and metadata (`customer_id`, `applicant_name`, `income`) per workflow invocation.
-  - **Local Logging Fallback**: Automatically prints structured node spans and execution times locally if LangSmith credentials are not set.
+
+#### 🎯 Key Observability Capabilities
+1. **Native LangSmith Tracing**: Automatic trace generation for DAG graph nodes, Gemini LLM prompts/responses, and tool runs enabled via `LANGCHAIN_TRACING_V2=true`.
+2. **Span & Node Latency Instrumentation**: High-precision wall-clock latency tracking using `time.perf_counter()` on all DAG agent nodes and short-circuit routers.
+3. **Execution Metadata & Dynamic Run Tagging**: Attaches domain attributes (`customer_id`, `income`, `credit_score`, `loan_amount`, `employment_type`) and tags (`credit-score-tier-700`, `agentic-workflow`, LLM model) to every invocation.
+4. **Autonomous Conditional Routing Visibility**: Visualizes dynamic graph branching in LangSmith trace trees when a financial rejection short-circuits and skips compliance checks.
+5. **Zero-Friction Fallback**: Includes `setup_observability()` which automatically switches to structured local console logging if LangSmith API credentials are not set.
+
+#### ⚙️ Observability Environment Setup (`.env`)
+To record workflow execution traces into your LangSmith dashboard, configure the following variables in `.env`:
+```env
+# LangSmith Telemetry & Tracing Configuration
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=your_langsmith_api_key_here
+LANGCHAIN_PROJECT=agentic-credit-card-workflow
+```
+
+#### 🧩 Code Instrumentation in `agentic_workflow.py`
+
+##### 1. Status Validation & Active Mode Detection (`setup_observability`)
+```python
+def setup_observability() -> bool:
+    """Validates and initializes LangSmith Observability environment settings."""
+    tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+    api_key = os.getenv("LANGCHAIN_API_KEY", "")
+    project_name = os.getenv("LANGCHAIN_PROJECT", "agentic-credit-card-workflow")
+    
+    if tracing_enabled and api_key:
+        print(f"[OBSERVABILITY]: LangSmith Tracing ACTIVE | Project: '{project_name}'")
+        return True
+    else:
+        print("[OBSERVABILITY]: Local Logging Mode ACTIVE.")
+        return False
+```
+
+##### 2. RunnableConfig & Metadata Builder (`get_observability_config`)
+```python
+def get_observability_config(state: ApplicationState, run_name: Optional[str] = None) -> Dict[str, Any]:
+    """Generates RunnableConfig containing rich tags and metadata for LangSmith tracing."""
+    return {
+        "run_name": run_name or f"CreditCardWorkflow-{state.get('applicant_name')}",
+        "tags": [
+            "agentic-workflow",
+            "credit-card-approval",
+            f"credit-score-tier-{state.get('credit_score', 0) // 100 * 100}",
+            get_valid_gemini_model()
+        ],
+        "metadata": {
+            "applicant_name": state.get("applicant_name"),
+            "customer_id": state.get("customer_id"),
+            "income": state.get("income", 0.0),
+            "credit_score": state.get("credit_score", 0),
+            "loan_amount": state.get("loan_amount", 0.0),
+            "employment_type": state.get("employment_type", ""),
+        }
+    }
+```
+
+##### 3. Fine-Grained `@traceable` Decorators
+- **Tool Spans**: `@traceable(name="evaluate_financial_risk", run_type="tool")` & `@traceable(name="verify_kyc_and_fraud", run_type="tool")`
+- **Chain / Node Spans**: `@traceable(name="node_financial_agent", run_type="chain")`, `@traceable(name="node_compliance_agent", run_type="chain")`, `@traceable(name="node_underwriter_decision", run_type="chain")`, `@traceable(name="node_notification_engine", run_type="chain")`
+- **Router Edge Spans**: `@traceable(name="route_after_financial", run_type="chain")`
+
+#### 📊 LangSmith Trace Hierarchy Visualizations
+
+##### Path 1: Standard Approval Path (Eligible Applicant - Ayush)
+```mermaid
+flowchart TD
+    Root["Root Run: Run-1-Eligible-Ayush"] --> N1["Span: node_financial_agent"]
+    N1 --> T1["Tool Span: evaluate_financial_risk"]
+    Root --> R1["Span: route_after_financial (Evaluates True -> compliance_node)"]
+    Root --> N2["Span: node_compliance_agent"]
+    N2 --> T2["Tool Span: verify_kyc_and_fraud"]
+    Root --> N3["Span: node_underwriter_decision"]
+    Root --> N4["Span: node_notification_engine"]
+```
+
+##### Path 2: Autonomous Short-Circuit Rejection Path (Ineligible Applicant - Rahul)
+```mermaid
+flowchart TD
+    Root["Root Run: Run-2-ShortCircuit-Rahul"] --> N1["Span: node_financial_agent (REJECTED)"]
+    N1 --> T1["Tool Span: evaluate_financial_risk"]
+    Root --> R1["Span: route_after_financial (Short-Circuit -> decision_node)"]
+    Root --> N3["Span: node_underwriter_decision (CARD REJECTED)"]
+    Root --> N4["Span: node_notification_engine"]
+```
 
 ---
 
@@ -168,13 +250,20 @@ Ensure you have **Python 3.10+** installed. Clone the repository and navigate to
    ```
 
 3. **Configure Environment Variables**:
-   Copy `.env.example` to `.env` and set your Gemini API key:
+   Copy `.env.example` to `.env` (or create `.env`) and set your API keys:
    ```bash
    cp .env.example .env
    ```
    Edit `.env`:
    ```env
+   # Gemini API Key
    GOOGLE_API_KEY=your_actual_gemini_api_key_here
+
+   # LangSmith Observability & Tracing Configuration
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+   LANGCHAIN_API_KEY=your_langsmith_api_key_here
+   LANGCHAIN_PROJECT=agentic-credit-card-workflow
    ```
 
 ---
@@ -205,17 +294,46 @@ python -m src.agentic_workflow.multi_agent
 
 ---
 
-### Step 3️⃣: Run Pattern 3 (Native Stateful LangGraph Workflow)
-Execute the stateful graph orchestrator with autonomous conditional routing:
+### Step 3️⃣: Run Pattern 3 (Native Stateful LangGraph Workflow with Observability)
+Execute the stateful graph orchestrator with autonomous conditional routing and LangSmith telemetry:
 ```bash
 python src/agentic_workflow/agentic_workflow.py
 # or
 python -m src.agentic_workflow.agentic_workflow
 ```
 *Expected Output*: 
-- **Test Case 1 (Eligible)**: Traverses Node 1 -> Node 2 -> Node 3 -> Node 4.
-- **Test Case 2 (Ineligible - Credit Score 520)**: Autonomous Router logs:  
-  `-> Financial Risk Failed! Short-circuiting workflow directly to Final Decision.` (Node 2 skipped).
+```text
+==================================================
+--- AUTONOMOUS AGENTIC AI WORKFLOW ORCHESTRATION ---
+==================================================
+[OBSERVABILITY]: LangSmith Tracing ACTIVE | Project: 'agentic-credit-card-workflow'
+
+>>> RUNNING TEST CASE 1: Eligible Applicant (Ayush)
+[WORKFLOW NODE 1]: Financial Risk Agent running...
+ -> Financial Risk Agent Result (0.12s): FINANCIAL_STATUS: APPROVED ...
+[AUTONOMOUS ROUTER]: Evaluating state after Financial Assessment...
+ -> Financial Risk Passed! Routing to Compliance & KYC Agent.
+[WORKFLOW NODE 2]: Compliance & KYC Agent running...
+ -> Compliance Agent Result (0.08s): COMPLIANCE_STATUS: APPROVED ...
+[WORKFLOW NODE 3]: Final Underwriting Decision Node...
+ -> Final Decision (0.01s): CARD APPROVED: Credit card issued successfully.
+[WORKFLOW NODE 4]: Customer Notification Engine running...
+ -> SMS/Email notification delivered to AYUSH: CARD APPROVED ... (0.001s)
+[SUMMARY 1]: Final Outcome = CARD APPROVED: Credit card issued successfully. (Total Time: 0.25s)
+
+==================================================
+>>> RUNNING TEST CASE 2: Ineligible Applicant (Low Credit Score)
+==================================================
+[WORKFLOW NODE 1]: Financial Risk Agent running...
+ -> Financial Risk Agent Result (0.05s): FINANCIAL_STATUS: REJECTED - Credit score is below 600.
+[AUTONOMOUS ROUTER]: Evaluating state after Financial Assessment...
+ -> Financial Risk Failed! Short-circuiting workflow directly to Final Decision.
+[WORKFLOW NODE 3]: Final Underwriting Decision Node...
+ -> Final Decision (0.001s): CARD REJECTED: Financial Risk Check Failed ...
+[WORKFLOW NODE 4]: Customer Notification Engine running...
+ -> SMS/Email notification delivered to RAHUL: CARD REJECTED ... (0.001s)
+[SUMMARY 2]: Final Outcome = CARD REJECTED: Financial Risk Check Failed ... (Total Time: 0.06s)
+```
 
 ---
 
